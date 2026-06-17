@@ -50,6 +50,11 @@ Live log of build status, decisions, and blockers. Updated after each module.
 
 **Fallback for unhandled ATSs:** Status → `manual_review`, URL preserved. User handles manually.
 
+**Re-login strategy:** Chrome profiles are primary (sessions persist). On expiry, scrapers auto-re-login:
+- LinkedIn: Google SSO with `yashdeshmukh7@gmail.com` — no password stored
+- All others (Naukri, Indeed, Instahyre, Wellfound, WeWorkRemotely, Hirist, CutShort): username/password from `config/credentials.enc` (Fernet-encrypted, key = `MASTER_CRYPTO_KEY` env var; never committed)
+- `LoginError` → platform skipped for the run (non-fatal); pipeline continues
+
 **Inspiration from career-ops:**
 - Provider plugin pattern (JS → Python adaptation)
 - Fuzzy role title matching (Jaccard similarity approach)

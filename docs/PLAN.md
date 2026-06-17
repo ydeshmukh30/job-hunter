@@ -103,39 +103,84 @@ src/tests/fixtures/mock_jobs.py
 
 ### base.py — BaseScraper ABC
 ```python
+class LoginError(Exception): ...
+
 class BaseScraper(ABC):
-    platform: str
+    platform: ClassVar[str]
+    LOGIN_INDICATORS: ClassVar[list[str]] = []  # URL substrings / CSS selectors → logged-out
+
     @abstractmethod
-    async def scrape(self, keywords: list[str], locations: list[str], limit: int) -> list[JobDict]
-    async def open_context(self, headless: bool, user_data_dir: str) -> BrowserContext
+    async def scrape(self, keywords: list[str], locations: list[str], limit: int) -> list[JobDict]: ...
+
+    async def open_context(self, headless: bool, user_data_dir: str) -> tuple[Browser, BrowserContext]: ...
+    async def is_logged_out(self, page: Page) -> bool: ...
+    async def login(self, page: Page, vault: CryptoVault) -> None: ...
 ```
 
 `JobDict` TypedDict: `{title, company, platform, url, apply_type, ctc, yoe_required, location, posted_at}`
 
 ### manager.py
 - `discover_plugins(enabled: list[str]) -> list[BaseScraper]` — scans `plugins/` dir, imports matching modules
-- `run_all(settings) -> list[JobDict]` — sequential loop, catches per-platform exceptions, logs and continues
-- 3 sequential CAPTCHA failures → skip platform, log alert
+- `run_all(settings, vault: CryptoVault) -> list[JobDict]` — sequential loop; for each platform:
+  1. Open page → call `is_logged_out()`
+  2. If logged out → `login(page, vault)` → retry scrape once
+  3. `LoginError` → log + skip platform (non-fatal)
+  4. 3 sequential CAPTCHA failures → skip platform, log alert
+  5. Any other exception → log traceback, return partial, continue
 - Each scraper: randomized viewport, human-like delays (2–6 s), gentle scrolling
 
 ### Plugin pattern (each plugin)
 ```python
 class LinkedInScraper(BaseScraper):
     platform = "linkedin"
+    LOGIN_INDICATORS = ["linkedin.com/login", "linkedin.com/authwall"]
+
+    async def login(self, page: Page, vault: CryptoVault) -> None:
+        creds = vault.get("linkedin")           # {"method": "google_sso", "google_email": ...}
+        await page.goto("https://www.linkedin.com/login")
+        await page.click("text=Sign in with Google")
+        # Select google_email account in popup, wait for feed redirect
+        await page.wait_for_url("**/feed**", timeout=30_000)
+
     async def scrape(self, keywords, locations, limit) -> list[JobDict]:
-        # Use self.open_context() with chrome profile
-        # Navigate search, extract listings
-        # Return normalized JobDicts
+        # open_context → is_logged_out → (login if needed) → navigate → extract
+        ...
+
+class NaukriScraper(BaseScraper):
+    platform = "naukri"
+    LOGIN_INDICATORS = ["naukri.com/nlogin", "#usernameField"]
+
+    async def login(self, page: Page, vault: CryptoVault) -> None:
+        creds = vault.get("naukri")             # {"method": "password", "username": ..., "password": ...}
+        await page.goto("https://www.naukri.com/nlogin/login")
+        await page.fill("#usernameField", creds["username"])
+        await page.fill("#passwordField", creds["password"])
+        await page.press("#passwordField", "Enter")
+        await page.wait_for_url("**naukri.com**", timeout=20_000)
+        if "nlogin" in page.url:
+            raise LoginError("Naukri login failed")
+
+# All other platforms follow the same password pattern as Naukri
 ```
 
-### crypto_vault.py (optional fallback)
-- `decrypt_credentials(platform: str) -> dict` — Fernet decrypt `config/credentials.enc`
-- `CryptoVault(key: bytes)` class
+### crypto_vault.py — required
+- `CryptoVault(key: bytes)` — loads `config/credentials.enc`, decrypts with Fernet on first `get()` call (lazy)
+- `vault.get(platform: str) -> dict` — returns credential dict; raises `KeyError` if platform not found
+- Passwords held in memory only; never logged
+
+### encrypt_creds.py — one-shot setup CLI
+```bash
+python src/scrapers/encrypt_creds.py
+```
+Interactive prompts for each platform. Writes `config/credentials.enc`. Safe to re-run to update a single platform's credentials.
 
 ### Smoke tests
 - `--dry-run` on mocked Playwright returns ≥3 valid JobDicts schema-clean
 - New plugin file auto-discovered (place fixture plugin, assert it appears in discovered list)
 - Single platform exception does not prevent other platforms running
+- Mocked logged-out page → `is_logged_out()` returns True → `login()` called → scrape retried
+- `LoginError` from `login()` → platform skipped, other platforms unaffected
+- `vault.get("linkedin")` returns `{"method": "google_sso", ...}`; `vault.get("naukri")` returns `{"method": "password", ...}`
 
 ---
 

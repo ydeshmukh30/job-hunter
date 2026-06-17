@@ -219,6 +219,7 @@ Plugin-based. Each platform is a class in `src/scrapers/plugins/<platform>.py` t
 ```python
 class BaseScraper(ABC):
     platform: ClassVar[str]           # must match settings slug
+    LOGIN_INDICATORS: ClassVar[list[str]] = []  # URL fragments / selectors that mean "logged out"
 
     async def scrape(
         self,
@@ -234,6 +235,12 @@ class BaseScraper(ABC):
         self, headless: bool, user_data_dir: str
     ) -> tuple[Browser, BrowserContext]:
         """Launch Playwright with randomized viewport + pre-logged-in Chrome profile."""
+
+    async def is_logged_out(self, page: Page) -> bool:
+        """Return True if the current page looks like a login/auth wall."""
+
+    async def login(self, page: Page, vault: CryptoVault) -> None:
+        """Platform-specific re-login. Raises LoginError on failure."""
 ```
 
 ### 5.3 JobDict contract
@@ -262,8 +269,10 @@ Each scraper must:
 ### 5.5 Failure handling
 
 Per-platform, per-invocation:
+- **Logged-out detected** → attempt re-login (see §5.8); retry scrape once; on second failure → log + skip platform
 - Network error → log warning, return partial results, continue to next platform
 - CAPTCHA detected (3 consecutive) → log `"CAPTCHA alert: {platform} blocked"`, skip platform
+- `LoginError` (re-login failed) → log `"Login failed: {platform} — check credentials.enc"`, skip platform
 - Selector timeout → log, return partial results
 - Any other exception → log full traceback, return `[]` for this platform, continue
 
@@ -280,9 +289,80 @@ Per-platform, per-invocation:
 | Hirist | easy_apply | Tech-focused India board |
 | CutShort | easy_apply | AI-matched; profile-based |
 
-### 5.7 Credential vault (optional)
+### 5.7 Credential vault
 
-`src/scrapers/crypto_vault.py` — Fernet encryption for platforms that lose their session. Key from `MASTER_CRYPTO_KEY` env var. `config/credentials.enc` is the encrypted store (if used). Never committed. `src/scrapers/encrypt_creds.py` is a one-shot CLI helper to create the encrypted file.
+`src/scrapers/crypto_vault.py` — **required** (not optional). Fernet-AES encryption. Key from `MASTER_CRYPTO_KEY` env var. Encrypted store at `config/credentials.enc` — never committed (in `.gitignore`).
+
+**Schema of `credentials.enc` (decrypted JSON):**
+```json
+{
+  "linkedin":       { "method": "google_sso", "google_email": "yashdeshmukh7@gmail.com" },
+  "naukri":         { "method": "password",   "username": "yashdeshmukh7@gmail.com", "password": "..." },
+  "indeed":         { "method": "password",   "username": "yashdeshmukh7@gmail.com", "password": "..." },
+  "instahyre":      { "method": "password",   "username": "yashdeshmukh7@gmail.com", "password": "..." },
+  "wellfound":      { "method": "password",   "username": "yashdeshmukh7@gmail.com", "password": "..." },
+  "weworkremotely": { "method": "password",   "username": "yashdeshmukh7@gmail.com", "password": "..." },
+  "hirist":         { "method": "password",   "username": "yashdeshmukh7@gmail.com", "password": "..." },
+  "cutshort":       { "method": "password",   "username": "yashdeshmukh7@gmail.com", "password": "..." }
+}
+```
+
+**`CryptoVault` API:**
+```python
+class CryptoVault:
+    def __init__(self, key: bytes): ...
+    def get(self, platform: str) -> dict:
+        """Decrypt credentials.enc, return entry for platform. Raises KeyError if missing."""
+```
+
+**`encrypt_creds.py`** — one-shot CLI to write/update `credentials.enc`:
+```bash
+python src/scrapers/encrypt_creds.py
+# Interactive: prompts for each platform's credentials, writes config/credentials.enc
+```
+
+### 5.8 Session-expiry detection and re-login
+
+The manager calls `is_logged_out()` immediately after opening the platform page and before scraping. On detection, it calls `login()` and retries once.
+
+**Logged-out detection (per platform):**
+
+| Platform | Indicator |
+|---|---|
+| LinkedIn | URL contains `linkedin.com/login` or `linkedin.com/authwall` |
+| Naukri | URL contains `naukri.com/nlogin` or login form selector `#usernameField` present |
+| Indeed | URL contains `indeed.com/account/login` |
+| Instahyre | URL contains `instahyre.com/login` |
+| Wellfound | URL contains `wellfound.com/login` or `angel.co/login` |
+| WeWorkRemotely | Not applicable (public board — no login required) |
+| Hirist | URL contains `hirist.tech/login` |
+| CutShort | URL contains `cutshort.io/login` |
+
+**Re-login flows:**
+
+**LinkedIn — Google SSO:**
+```
+1. Navigate to linkedin.com/login
+2. Click "Sign in with Google"
+3. Google auth popup appears — select account "yashdeshmukh7@gmail.com"
+4. Wait for redirect back to linkedin.com/feed (timeout 30s)
+5. If still on auth page after 30s → raise LoginError
+```
+
+**All other platforms — username/password:**
+```
+1. creds = vault.get(platform)          # {"method": "password", "username": ..., "password": ...}
+2. Navigate to platform login URL
+3. Fill username field with creds["username"]
+4. Fill password field with creds["password"]
+5. Click submit / press Enter
+6. Wait for redirect away from login page (timeout 20s)
+7. If login page still visible after timeout → raise LoginError
+```
+
+**`LoginError`** — custom exception in `src/scrapers/base.py`. Caught by manager; triggers skip + log. Never propagates to the pipeline level.
+
+**Security:** Passwords are decrypted in memory only, never logged, never stored in plaintext on disk.
 
 ---
 

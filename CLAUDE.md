@@ -116,8 +116,13 @@ The CSV is the single source of truth. Every write recomputes the SHA-256 sideca
 ### Plugin-based scrapers (adapted from santifer/career-ops provider pattern)
 Each platform is a single file in `src/scrapers/plugins/`. The manager auto-discovers enabled plugins from `settings.toml`. To add a platform: drop one file in the plugins directory.
 
-### Pre-logged-in Chrome profiles
-No automated credential login. Each platform has a configured `chrome_profiles` path in `settings.toml` pointing to a persistent Chrome user-data-dir where the user is already logged in.
+### Pre-logged-in Chrome profiles + automatic re-login
+Each platform uses a persistent Chrome user-data-dir (configured in `settings.toml → chrome_profiles`). The scraper checks for session expiry on every run and re-logs in automatically if needed:
+
+- **LinkedIn:** Google SSO — clicks "Sign in with Google", selects `yashdeshmukh7@gmail.com`
+- **All other platforms:** username/password from `config/credentials.enc` (Fernet-encrypted, key from `MASTER_CRYPTO_KEY`)
+
+Credentials are decrypted in memory only, never logged. Set up credentials once with `python src/scrapers/encrypt_creds.py`.
 
 ### Self-learning apply form mappings
 `src/apply/form_profile.json` has a `learned_mappings` section. When the applier encounters an unknown field label, it prompts the user via `input()`, persists the answer, and uses it for future applications. This is borrowed from the career-ops form-handling pattern.
