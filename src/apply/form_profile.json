@@ -1,0 +1,21 @@
+{
+  "name": "Yash Deshmukh",
+  "email": "yashdeshmukh7@gmail.com",
+  "phone": "",
+  "linkedin_url": "",
+  "github_url": "",
+  "resume_path": "config/resume.pdf",
+  "years_experience": 5,
+  "current_ctc": "",
+  "expected_ctc": "38+",
+  "notice_period": "30 days",
+  "willing_to_relocate": "Yes",
+  "work_authorization": "Indian Citizen",
+  "cover_letter_default": "",
+  "learned_mappings": {
+    "expected compensation": "expected_ctc",
+    "years of experience": "years_experience",
+    "current salary": "current_ctc",
+    "notice period": "notice_period"
+  }
+}
