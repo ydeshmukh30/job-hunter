@@ -425,14 +425,17 @@ if no allowed_title matched: FAIL
 **Gate 3: CTC / YOE rule**
 ```
 parse_ctc_lpa(ctc_str) → (min_lpa, max_lpa) | None
+  # Returns None for foreign-currency amounts (USD/GBP/EUR/SGD/AED/etc.)
+  # Foreign-currency jobs are treated identically to "CTC not stated" → keep
+
 parse_yoe_range(yoe_str) → (min_yoe, max_yoe) | None
 
-if ctc_parsed:
+if ctc_parsed:                     # INR/LPA range successfully parsed
     pass if min_lpa <= 38.0 <= max_lpa
-elif yoe_parsed:
+elif yoe_parsed:                   # no parseable INR CTC, but YOE stated
     pass if min_yoe <= 5 <= max_yoe
-else:
-    PASS (neither stated → keep)
+else:                              # neither parseable — includes foreign-currency jobs
+    PASS (keep — do not skip on currency alone)
 ```
 
 **Gate 4: Location**
@@ -450,15 +453,22 @@ pass if normalized_company not in {normalize(c) for c in existing_companies}
 
 ### 6.2 CTC parsing spec
 
-Handles formats found on Indian job boards:
+Returns `(min_lpa, max_lpa)` for INR amounts. Returns `None` — meaning "treat as unstated, keep the job" — for anything that cannot be expressed in LPA (foreign currency, unparseable strings).
+
 ```
 "30-50 LPA"      → (30.0, 50.0)
 "₹30L - ₹50L"   → (30.0, 50.0)
 "30 to 50 LPA"   → (30.0, 50.0)
 "30L"            → (30.0, 30.0)   # single value → treat as exact
 "30,00,000"      → (30.0, 30.0)   # rupees → convert to LPA (÷100000)
-"$80k-$120k"     → None           # USD → skip (out of scope)
+"$80k-$120k"     → None           # USD — keep, not skip
+"£60k-£80k"      → None           # GBP — keep
+"SGD 8000/month" → None           # SGD — keep
+"Competitive"    → None           # unstated — keep
+""               → None           # blank — keep
 ```
+
+Foreign-currency listings are kept because the compensation may be negotiable, remote, or worth investigating regardless of the stated figure. Gate 3 falls through to "neither stated → PASS".
 
 ### 6.3 YOE parsing spec
 
@@ -603,30 +613,56 @@ Both `applied` and `manual_review` outcomes count as an attempt.
 **Required sections:**
 1. **Role summary** — title, company, location, JD URL (from CSV row)
 2. **System design topics** — 3–5 topics most relevant to this company's likely stack
-3. **Deep-dive questions** — 5 questions tailored to company + role
-4. **Resume alignment** — 3 bullets from Yash's profile that map strongest to this JD
+3. **Deep-dive questions** — 5 questions tailored to company + role, anchored to actual resume bullets
+4. **Resume alignment** — 3 resume bullets that map strongest to this JD, with suggested talking-point expansions
 5. **Company context** — funding stage, engineering blog if known, team size
+
+**Resume extraction:**
+`brief.py` extracts plain text from `config/resume.pdf` using `pdfplumber` before making the API call. The extracted text is injected into the prompt verbatim. This ensures questions and alignments reference Yash's actual projects and metrics, not generic bullet templates.
+
+```python
+def extract_resume_text(resume_path: Path) -> str:
+    import pdfplumber
+    with pdfplumber.open(resume_path) as pdf:
+        return "\n".join(page.extract_text() or "" for page in pdf.pages).strip()
+```
 
 **Prompt injected to Anthropic API:**
 ```
 You are helping Yash Deshmukh prepare for an interview at {company} for the role of {title}.
 
-Yash's profile:
-- 5 YOE, Senior Backend Engineer
-- Stack: Java, Spring Boot, Kafka, Cassandra, AWS
-- Scale: ~1M RPM pipelines, ~680 GB/day streaming across distributed Kafka + Cassandra clusters
-- Notable: Designed and operates large-scale event-driven microservice architectures
+=== YASH'S RESUME (plain text) ===
+{resume_text}
+=== END RESUME ===
 
 Job URL: {url}
-Interview in: {minutes_until} minutes
+Interview is tomorrow at {interview_time} IST.
 
-Generate:
-1. Top 3–5 system design topics to review for this interview
-2. 5 deep-dive technical questions tailored to {company}'s likely stack/challenges
-3. 3 of Yash's experience bullets that best align with this role
-4. Any known context about {company}'s engineering culture or recent technical content
+Using the resume above, generate the following — be specific and anchor every point
+to actual projects, metrics, or technologies mentioned in the resume:
 
-Be specific and actionable. Yash is reading this 1 hour before the call.
+1. Top 3–5 system design topics Yash should review for this specific role at {company}
+
+2. 5 deep-dive technical questions the interviewer is likely to ask, tailored to
+   {company}'s known stack/challenges. For each question, include a 2-line hint
+   referencing the most relevant part of Yash's resume as a starting point.
+
+3. The 3 resume bullets that align most strongly with this JD. For each, write
+   a 1-sentence talking-point expansion Yash can use to open his answer.
+
+4. Any relevant context about {company}'s engineering culture, recent tech blog
+   posts, or known architectural challenges (clearly label if speculative).
+
+Be direct and concise. Yash is reading this the evening before the interview.
+```
+
+**`generate_brief()` signature:**
+```python
+def generate_brief(job: dict, settings: Settings) -> str:
+    resume_text = extract_resume_text(Path(settings.resume_pdf))
+    # build prompt with resume_text injected
+    # call Anthropic API
+    # return HTML-formatted brief
 ```
 
 ### 8.3 LLM spend tracking

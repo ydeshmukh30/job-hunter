@@ -145,9 +145,9 @@ Keep a job ONLY if ALL hold:
 1. Full-time role
 2. Title matches (fuzzy, case-insensitive): SDE 2, SDE 3, Senior Software Engineer, Senior Backend Engineer, Lead Engineer, Staff Engineer
 3. Compensation/YOE rule:
-   - CTC range present → keep if 38 LPA ∈ [min, max]
+   - INR CTC range parseable → keep if 38 LPA ∈ [min, max]
    - Else YOE range present → keep if 5 ∈ [min, max]
-   - Else (neither stated) → KEEP
+   - Else → KEEP (covers: CTC not stated, foreign currency USD/GBP/SGD/etc., "Competitive")
 4. Location ∈ {Pune, Bengaluru, Hyderabad, Remote}
 5. Company not already in the tracker (dedup by company)
 

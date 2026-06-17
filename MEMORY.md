@@ -38,7 +38,9 @@ Live log of build status, decisions, and blockers. Updated after each module.
 
 **Chrome profiles:** Pre-logged-in persistent user-data-dirs. No credential storage. No automated login. Each platform needs its own profile dir (user sets up manually once).
 
-**Filter rule (locked):** Senior title AND (38 ∈ CTC range) OR (no CTC AND 5 ∈ YOE range) OR (neither stated → keep)
+**Filter rule (locked):** Senior title AND (38 ∈ INR CTC range) OR (no parseable INR CTC AND 5 ∈ YOE range) OR (neither parseable → keep). Foreign-currency CTC (USD, GBP, SGD, etc.) is treated as "not stated" → always kept.
+
+**Interview brief includes resume:** `brief.py` extracts full text from `config/resume.pdf` via `pdfplumber` and injects it verbatim into the Anthropic prompt. Questions and bullet alignments are anchored to Yash's actual projects and metrics, not generic templates.
 
 **LLM spend cap:** $1.00/day hard cap tracked in `run_state.json`. Brief poller respects this; pipeline itself does not make LLM calls.
 

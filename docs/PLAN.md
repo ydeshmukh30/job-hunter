@@ -351,13 +351,11 @@ src/tests/test_brief.py
 - Unretried skipped items from **previous runs** also appear in section 2 — they persist until resolved
 
 ### brief.py
-- `generate_brief(job: dict, candidate_profile: dict, model: str) -> str`
-- Anthropic SDK call (async), `max_tokens=2000`
-- Prompt injects: candidate profile + YOE/stack + company + JD URL + `last_activity`
-- Output sections:
-  - Core system-design topics relevant to this company's stack
-  - 5 deep-dive questions tailored to company tech
-  - 3 resume bullet alignments (which of Yash's bullets match the JD)
+- `extract_resume_text(resume_path: Path) -> str` — reads `config/resume.pdf` with `pdfplumber`, returns plain text
+- `generate_brief(job: dict, settings: Settings) -> str`
+  - Calls `extract_resume_text()` first; injects full resume text into the prompt
+  - Anthropic SDK call, `max_tokens=2000`
+  - Prompt sections: resume text block → role context → 5 questions anchored to resume bullets → 3 bullet alignments with talking-point expansions → company context
 - `send_brief(html: str, interview_date: datetime, settings: Settings)` — SMTP
 
 ### run_brief_poller.py
