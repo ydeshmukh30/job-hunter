@@ -2,7 +2,7 @@
 
 ## What This Repo Is
 
-An automated, personal job-hunting pipeline for Yash Deshmukh. It scrapes job boards via Playwright (using pre-logged-in Chrome profiles), filters by title/CTC/YOE, auto-applies, and sends a daily email digest. It runs daily at 7 PM IST via macOS cron, with a brief poller every 30 min.
+An automated, personal job-hunting pipeline for Yash Deshmukh. It scrapes job boards via Playwright (using pre-logged-in Chrome profiles), filters by title/CTC/YOE, auto-applies, and sends a daily email digest. It runs daily at 7 PM IST via macOS cron. A separate brief poller runs at 9 PM IST daily and emails prep briefs for all interviews scheduled the next day.
 
 ## Candidate Profile
 
@@ -31,7 +31,7 @@ job-hunter/
 ├── src/
 │   ├── config.py              # Typed settings loader (env + toml)
 │   ├── run_daily.py           # Main pipeline entrypoint
-│   ├── run_brief_poller.py    # Standalone interview brief daemon
+│   ├── run_brief_poller.py    # Standalone brief runner — 9 PM IST, next-day interviews
 │   ├── common/
 │   │   ├── data_store.py      # ONLY writer to the CSV
 │   │   ├── integrity.py       # SHA-256 guard

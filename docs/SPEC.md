@@ -69,7 +69,7 @@ titles = [
 
 [schedule]
 daily_run_cron  = "30 13 * * *"   # 7:00 PM IST = 13:30 UTC
-brief_poll_cron = "*/30 * * * *"
+brief_poll_cron = "30 15 * * *"   # 9:00 PM IST = 15:30 UTC
 
 [paths]
 resume_pdf = ""   # MUST be set by user before first live run
@@ -465,8 +465,8 @@ Both `applied` and `manual_review` outcomes count as an attempt.
 
 ### 8.2 Interview brief email
 
-**Trigger:** `run_brief_poller.py` detects row with `status=interview_scheduled` and `interview_date` 45–75 min from now  
-**Subject:** `Interview Brief — {company} ({title}) in {minutes_until} min`  
+**Trigger:** `run_brief_poller.py` runs once at 9 PM IST daily and generates briefs for all rows with `status=interview_scheduled` whose `interview_date` falls on the next calendar day (midnight to midnight IST).  
+**Subject:** `Interview Brief — {company} ({title}) tomorrow at {time}`  
 **Format:** HTML
 
 **Required sections:**
@@ -544,27 +544,32 @@ Each agent:
 
 ### 9.2 run_brief_poller.py
 
-Standalone script. Designed to run via cron every 30 min.
+Standalone script. Designed to run once per day via cron at 9 PM IST. Generates briefs for all interviews scheduled on the next calendar day.
 
 ```python
 def poll():
     run_state.reset_daily_spend_if_new_day()
-    interviews = data_store.read_by_status("interview_scheduled")
     now = datetime.now(tz=IST)
-    for job in interviews:
-        interview_dt = parse_iso(job["interview_date"])
-        minutes_until = (interview_dt - now).total_seconds() / 60
-        if 45 <= minutes_until <= 75:
-            if run_state.get_llm_spend_today() >= settings.daily_llm_usd_cap:
-                send_cap_notice_email(settings)
-                continue
-            try:
-                brief_html = brief.generate_brief(job, settings)
-                brief.send_brief(brief_html, interview_dt, settings)
-                run_state.add_llm_spend(estimated_usd)
-            except Exception as e:
-                log.warning(f"Brief failed for {job['company']}: {e}")
-                continue
+    tomorrow = (now + timedelta(days=1)).date()
+
+    interviews = data_store.read_by_status("interview_scheduled")
+    next_day_interviews = [
+        job for job in interviews
+        if parse_iso(job["interview_date"]).astimezone(IST).date() == tomorrow
+    ]
+
+    for job in next_day_interviews:
+        interview_dt = parse_iso(job["interview_date"]).astimezone(IST)
+        if run_state.get_llm_spend_today() >= settings.daily_llm_usd_cap:
+            send_cap_notice_email(settings)
+            break  # cap hit — no point continuing; remaining jobs skipped
+        try:
+            brief_html = brief.generate_brief(job, settings)
+            brief.send_brief(brief_html, interview_dt, settings)
+            run_state.add_llm_spend(estimated_usd)
+        except Exception as e:
+            log.warning(f"Brief failed for {job['company']}: {e}")
+            continue  # always continue to next interview on error
 ```
 
 ---

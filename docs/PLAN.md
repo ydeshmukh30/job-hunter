@@ -253,20 +253,21 @@ src/tests/test_brief.py
 - `send_brief(html: str, interview_date: datetime, settings: Settings)` — SMTP
 
 ### run_brief_poller.py
-- Runs standalone (cron every 30 min)
+- Runs standalone (cron once daily at 9 PM IST)
 - `poll()`:
   1. `reset_daily_spend_if_new_day()`
-  2. Read rows with `status='interview_scheduled'`
-  3. Filter: `interview_date` is within 45–75 min from now
-  4. For each: check `get_llm_spend_today() < DAILY_LLM_USD_CAP`
-  5. If cap OK: `generate_brief()`, `send_brief()`, `add_llm_spend(estimated_usd)`
-  6. If cap exceeded: send "cap reached" email notice instead
-  7. Corrupt/unparseable row → log warning, skip, continue
+  2. Compute `tomorrow = (now_IST + 1 day).date()`
+  3. Read rows with `status='interview_scheduled'`
+  4. Filter: `interview_date` (as IST date) == tomorrow
+  5. For each: check `get_llm_spend_today() < DAILY_LLM_USD_CAP`
+  6. If cap OK: `generate_brief()`, `send_brief()`, `add_llm_spend(estimated_usd)`
+  7. If cap exceeded: send "cap reached" email notice, stop processing remaining interviews
+  8. Corrupt/unparseable row → log warning, skip, continue
 
 ### Smoke tests
 - `test_digest.py`: fixture with 5 rows (2 applied, 1 manual_review, 1 interview_scheduled, 1 rejected) → HTML contains expected sections; SMTP mocked (assert `sendmail` called once)
 - Zero-activity fixture → HTML shows "No activity today"; email still sent
-- `test_brief.py`: fixture row with interview 60 min out → brief generated (mocked Anthropic); `add_llm_spend` called; spending at $1.00 → skipped + notice sent
+- `test_brief.py`: fixture rows with interviews tomorrow → briefs generated (mocked Anthropic); `add_llm_spend` called per brief; fixture row with interview today or day-after-tomorrow → skipped; spending at $1.00 → cap notice sent, remaining briefs skipped
 
 ---
 

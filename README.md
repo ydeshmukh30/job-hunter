@@ -188,8 +188,8 @@ Add these two lines:
 # Daily pipeline at 7:00 PM IST (UTC+5:30 = 13:30 UTC)
 30 13 * * * /usr/bin/env bash -c 'source /Users/yashdeshmukh/.zshenv && cd /Users/yashdeshmukh/Desktop/job-hunter && python -m src.run_daily --live >> /tmp/job-hunter-daily.log 2>&1'
 
-# Interview brief poller every 30 minutes
-*/30 * * * * /usr/bin/env bash -c 'source /Users/yashdeshmukh/.zshenv && cd /Users/yashdeshmukh/Desktop/job-hunter && python -m src.run_brief_poller >> /tmp/job-hunter-poller.log 2>&1'
+# Interview brief poller at 9:00 PM IST daily (15:30 UTC) — briefs for next-day interviews
+30 15 * * * /usr/bin/env bash -c 'source /Users/yashdeshmukh/.zshenv && cd /Users/yashdeshmukh/Desktop/job-hunter && python -m src.run_brief_poller >> /tmp/job-hunter-poller.log 2>&1'
 ```
 
 > **Note:** macOS cron runs in UTC. 7:00 PM IST = 13:30 UTC.

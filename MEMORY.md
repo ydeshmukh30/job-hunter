@@ -42,7 +42,7 @@ Live log of build status, decisions, and blockers. Updated after each module.
 
 **LLM spend cap:** $1.00/day hard cap tracked in `run_state.json`. Brief poller respects this; pipeline itself does not make LLM calls.
 
-**Cron schedule:** Daily at 7:00 PM IST (`30 13 * * *` in UTC crontab). Brief poller every 30 min.
+**Cron schedule:** Daily pipeline at 7:00 PM IST (`30 13 * * *` UTC). Brief poller at 9:00 PM IST (`30 15 * * *` UTC) — batches all next-day interviews in a single run rather than polling every 30 min.
 
 **Dry-run default:** `--live` required for actual form submission. Scraping + filtering + email always run.
 
