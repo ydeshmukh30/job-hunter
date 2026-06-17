@@ -89,7 +89,7 @@ scrape_per_platform = 5
 apply_attempts_per_platform = 5
 
 [paths]
-resume_pdf = "/Users/yashdeshmukh/Documents/resume.pdf"
+resume_pdf = "config/resume.pdf"   # already committed — update if you replace the file
 
 [chrome_profiles]
 linkedin  = "/Users/yashdeshmukh/Library/Application Support/Google/Chrome/JobHunterLinkedIn"
@@ -110,9 +110,9 @@ open -a "Google Chrome" --args \
 
 This ensures scrapers and appliers run with your authenticated session. No passwords are stored by the system.
 
-### 6. Add your resume
+### 6. Resume
 
-Copy your PDF resume to the path set in `config/settings.toml` → `paths.resume_pdf`.
+`config/resume.pdf` (Yash_resume_v3.pdf) is already committed. To use a different version, replace that file and update `paths.resume_pdf` in `config/settings.toml` if the filename changes.
 
 ---
 

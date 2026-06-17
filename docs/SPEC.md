@@ -72,7 +72,7 @@ daily_run_cron  = "30 13 * * *"   # 7:00 PM IST = 13:30 UTC
 brief_poll_cron = "30 15 * * *"   # 9:00 PM IST = 15:30 UTC
 
 [paths]
-resume_pdf = ""   # MUST be set by user before first live run
+resume_pdf = "config/resume.pdf"   # Yash_resume_v3.pdf — committed to repo
 
 [runtime]
 headless  = true
