@@ -1,0 +1,52 @@
+[general]
+enabled_plugins = [
+  "linkedin", "naukri", "indeed", "instahyre",
+  "wellfound", "weworkremotely", "hirist", "cutshort"
+]
+
+[search]
+keywords  = [
+  "Senior Backend Engineer", "SDE 2", "SDE 3",
+  "Staff Engineer", "Lead Backend Engineer", "Senior Software Engineer"
+]
+locations = ["Pune", "Bengaluru", "Hyderabad", "Remote"]
+
+[limits]
+scrape_per_platform        = 5
+apply_attempts_per_platform = 5
+
+[filter]
+min_ctc_lpa    = 38.0
+target_yoe     = 5
+full_time_only = true
+titles = [
+  "SDE 2", "SDE 3",
+  "Senior Software Engineer", "Senior Backend Engineer",
+  "Lead Engineer", "Staff Engineer"
+]
+
+[schedule]
+daily_run_cron  = "30 13 * * *"   # 7:00 PM IST = 13:30 UTC
+brief_poll_cron = "30 15 * * *"   # 9:00 PM IST = 15:30 UTC
+
+[paths]
+resume_pdf = "config/resume.pdf"
+
+[runtime]
+headless  = true
+timezone  = "Asia/Kolkata"
+
+[chrome_profiles]
+linkedin        = ""
+naukri          = ""
+indeed          = ""
+instahyre       = ""
+wellfound       = ""
+weworkremotely  = ""
+hirist          = ""
+cutshort        = ""
+
+[notify]
+digest_recipient = "yashdeshmukh7@gmail.com"
+smtp_host        = "smtp.gmail.com"
+smtp_port        = 587
