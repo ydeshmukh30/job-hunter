@@ -174,6 +174,10 @@ def parse_yoe_range(yoe_str: str) -> tuple[int, int] | None
 5. Company not in `existing_companies`
 
 ### form_profile.json schema
+
+Two sections live in the same file:
+
+**Base profile fields** (pre-seeded, user-editable):
 ```json
 {
   "name": "Yash Deshmukh",
@@ -186,23 +190,71 @@ def parse_yoe_range(yoe_str: str) -> tuple[int, int] | None
   "current_ctc": "",
   "expected_ctc": "38+",
   "notice_period": "30 days",
+  "willing_to_relocate": "Yes",
+  "work_authorization": "Indian Citizen"
+}
+```
+
+**`learned_mappings`** — auto-grown at runtime. Maps raw form-label (lowercased) → profile key. When a label maps to a key that is NOT yet in the profile (i.e. a genuinely new field), the user is prompted, the value is added to the profile, and the mapping is stored:
+```json
+{
   "learned_mappings": {
     "expected compensation": "expected_ctc",
-    "years of experience": "years_experience"
+    "years of experience": "years_experience",
+    "current notice period": "notice_period",
+    "are you open to relocation": "willing_to_relocate",
+    "current_salary_band": "current_ctc"
+    // ... grows automatically as new fields are encountered
   }
 }
 ```
 
+**Runtime growth example** — when the applier hits an unseen field `"Preferred work arrangement"`:
+```json
+// Before
+{ "learned_mappings": { ... } }
+
+// After user enters "Hybrid"
+{
+  "preferred_work_arrangement": "Hybrid",
+  "learned_mappings": {
+    "preferred work arrangement": "preferred_work_arrangement",
+    ...
+  }
+}
+```
+This means each unique field label is only asked **once** across all platforms and all future runs.
+
 ### Apply flow (per platform, per job)
-1. Load form profile + learned_mappings
+1. Load `form_profile.json` — base profile fields + `learned_mappings`
 2. Open platform Playwright context (pre-logged-in Chrome profile)
 3. Navigate to job URL
 4. Detect apply type (Easy Apply vs external form)
-5. For each field: extract label → fuzzy-match `learned_mappings` → fill or prompt
-6. Upload resume PDF
-7. DRY-RUN: log submission payload, update status to `applied` (with dry-run marker)
-8. LIVE: click final submit → update status to `applied`
-9. On error/unknown ATS/timeout: status → `manual_review`, log URL, continue
+5. For each form field:
+   ```
+   label = extract_field_label()          # e.g. "Current Notice Period"
+   key   = fuzzy_match_learned_mappings(label)
+
+   if key found AND key in profile:
+       fill(profile[key])                 # auto-fill from stored value
+   else:
+       # NEW FIELD — prompt user
+       value = input(f"New field '{label}': enter your answer: ")
+       key   = slugify(label)             # e.g. "current_notice_period"
+
+       # Persist value + mapping back to form_profile.json (atomic write)
+       profile[key]                   = value
+       profile["learned_mappings"][label] = key
+       write_form_profile(profile)
+
+       fill(value)
+   ```
+6. Upload resume PDF (`settings.paths.resume_pdf`)
+7. DRY-RUN: log full submission payload (field → value pairs); update status → `applied` (tagged `dry_run=true`)
+8. LIVE: click final submit → update status → `applied`, record `applied_at`
+9. On error / unknown ATS / selector timeout: status → `manual_review`, preserve URL, continue to next job
+
+**`write_form_profile(profile)`** must be atomic: write to a `.tmp` file first, then `os.replace()` to avoid partial-write corruption. Re-verify the written JSON parses cleanly before continuing.
 
 ### Smoke tests (`test_matcher.py`)
 - Title hit: "Senior Backend Engineer at Razorpay" → pass

@@ -368,7 +368,7 @@ Handles formats found on Indian job boards:
 
 ### 7.1 Form profile
 
-`src/apply/form_profile.json` — base profile + learned_mappings:
+`src/apply/form_profile.json` — **the single persistent store for everything the applier knows about form fields**. Read at the start of every apply session; written back atomically whenever a new field is encountered. The file grows over time and never shrinks — so each unique field label is asked at most once across all runs and all platforms.
 
 ```json
 {
@@ -394,6 +394,20 @@ Handles formats found on Indian job boards:
 }
 ```
 
+**Runtime growth example** — first time the applier hits `"Preferred work arrangement"`:
+```json
+// After user enters "Hybrid":
+{
+  ...
+  "preferred_work_arrangement": "Hybrid",   // ← new value stored at top level
+  "learned_mappings": {
+    ...,
+    "preferred work arrangement": "preferred_work_arrangement"  // ← new mapping stored
+  }
+}
+```
+Next time any platform shows this label, it auto-fills `"Hybrid"` with no prompt.
+
 ### 7.2 Apply flow
 
 ```
@@ -405,13 +419,19 @@ for each filtered job (up to apply_attempts_per_platform per platform):
        continue
   4. begin_apply_flow()
   5. for each form field:
-       label = extract_field_label()
-       key = fuzzy_match_learned_mappings(label)
-       if key found:
-           fill(profile[key])
+       label = extract_field_label()            # raw text, e.g. "Current Notice Period"
+       norm  = label.lower().strip()
+       key   = fuzzy_match_learned_mappings(norm, profile["learned_mappings"])
+
+       if key and key in profile:
+           fill(profile[key])                   # known field — auto-fill silently
        else:
-           value = input(f"Unknown field '{label}': ")
-           persist_mapping(label, key_name, value)
+           # NEW FIELD — prompt user, persist value + mapping
+           value = input(f"New field '{label}': ")
+           key   = slugify(norm)                # e.g. "current_notice_period"
+           profile[key] = value
+           profile["learned_mappings"][norm] = key
+           write_form_profile_atomic(profile)   # tmp file → os.replace()
            fill(value)
   6. upload_resume(settings.paths.resume_pdf)
   7. if --dry-run:
