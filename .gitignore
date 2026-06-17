@@ -1,0 +1,37 @@
+# Secrets
+.env
+config/credentials.enc
+
+# Data (user-specific, committed separately after each run)
+# Note: CSV IS committed (it's the source of truth). Only these are excluded:
+src/data/*.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Playwright
+playwright-report/
+test-results/
+
+# Logs
+*.log
+*.err
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
