@@ -83,8 +83,14 @@ python -m src.run_daily --check
 # Run a single agent manually
 python -m src.run_daily --only scraper --dry-run
 
-# Status summary (per-status counts)
+# Status summary (per-status counts + unretried skipped items)
 python -m src.run_daily --status-summary
+
+# Retry all skipped platforms and manual_review jobs (after manual intervention)
+python -m src.run_daily --retry-skipped
+
+# Retry a single platform only
+python -m src.run_daily --retry-platform linkedin
 
 # Run interview brief poller
 python -m src.run_brief_poller
@@ -109,6 +115,9 @@ DAILY_LLM_USD_CAP       e.g. 1.00 (hard cap in USD)
 
 ### Sequential-only pipeline
 Agents NEVER run concurrently. Order: Init → Scraper → Filter+Apply → Persist+Commit → Notify. A failure in one step logs a warning and lets the next step run on whatever data exists.
+
+### Skip tracking and manual-intervention retry
+Every skipped platform (LoginError / CAPTCHA / network) and every skipped job (manual_review) is recorded in `run_state.json → skipped`. They surface in the daily digest email under "Needs your attention" with exact retry commands. After fixing the issue manually, run `--retry-skipped` (all unretried) or `--retry-platform <name>` (single platform). The retry pipeline runs scraper + apply only for the targeted items — not the full daily pipeline.
 
 ### CSV + SHA-256 integrity
 The CSV is the single source of truth. Every write recomputes the SHA-256 sidecar. On every read, the hash is verified. A mismatch (manual edit) blocks the pipeline unless `--force-accept-manual-edit` is passed.

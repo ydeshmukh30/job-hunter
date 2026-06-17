@@ -50,6 +50,8 @@ Live log of build status, decisions, and blockers. Updated after each module.
 
 **Fallback for unhandled ATSs:** Status → `manual_review`, URL preserved. User handles manually.
 
+**Skip tracking + retry:** Every skipped platform and skipped job is written to `run_state.json → skipped.*` with `retried=false`. The digest email surfaces all unretried items (across days, not just today) under "Needs your attention" with exact CLI commands. User fixes the issue manually, then runs `--retry-skipped` or `--retry-platform <name>`. Retry pipeline runs only for targeted items. `retried=true` is set after each attempt regardless of outcome (prevents infinite retry loops).
+
 **Re-login strategy:** Chrome profiles are primary (sessions persist). On expiry, scrapers auto-re-login:
 - LinkedIn: Google SSO with `yashdeshmukh7@gmail.com` — no password stored
 - All others (Naukri, Indeed, Instahyre, Wellfound, WeWorkRemotely, Hirist, CutShort): username/password from `config/credentials.enc` (Fernet-encrypted, key = `MASTER_CRYPTO_KEY` env var; never committed)
