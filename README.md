@@ -52,7 +52,8 @@ Built for: **Yash Deshmukh** — Senior Backend Engineer (Java, Spring Boot, Kaf
 ### 2. Install
 
 ```bash
-cd ~/Desktop/job-hunter
+cd ~/Desktop/superset/job-hunter
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium
 ```
@@ -170,7 +171,171 @@ If you edited the CSV manually (integrity check will block the pipeline), pass t
 python -m src.run_brief_poller
 ```
 
-Checks for interviews in ~1 hour, generates a prep brief via Claude, emails it. Normally run via cron.
+Runs at 9 PM IST daily. Generates prep briefs for all interviews scheduled tomorrow, emails them immediately. Normally run via cron.
+
+---
+
+## Testing guide
+
+Follow these steps in order. Each step gates the next.
+
+### Step 1 — Activate environment and install Chromium
+
+```bash
+cd ~/Desktop/superset/job-hunter
+source .venv/bin/activate
+playwright install chromium
+```
+
+### Step 2 — Set up environment variables
+
+```bash
+cp .env.example .env
+```
+
+Fill in `.env`:
+
+```env
+# Generate key:
+# python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+MASTER_CRYPTO_KEY=<generated key>
+GMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=claude-sonnet-4-6
+DAILY_LLM_USD_CAP=1.00
+```
+
+### Step 3 — Run unit tests
+
+```bash
+pytest src/tests/ -v
+```
+
+Expected: **138/138 pass**. Fix any failures before continuing.
+
+### Step 4 — Dry-run the full pipeline (no browser needed yet)
+
+```bash
+python -m src.run_daily --dry-run
+```
+
+The scraper will warn per platform (no Chrome profiles yet) — that's expected. Verify:
+- `src/data/job_applications.csv` created with correct headers
+- `src/data/job_applications.csv.sha256` exists alongside it
+- `src/data/run_state.json` created with agent entries
+- Pipeline reaches the notify step without crashing
+
+### Step 5 — Encrypt your credentials
+
+```bash
+python src/scrapers/encrypt_creds.py
+```
+
+Follow prompts. LinkedIn → method `google_sso`. All others → method `password` with username/password. Writes `config/credentials.enc` (never committed).
+
+### Step 6 — Set up Chrome profiles (one per platform)
+
+Create a dedicated Chrome profile for each platform and log in manually:
+
+```bash
+# LinkedIn
+open -a "Google Chrome" --args \
+  --user-data-dir="$HOME/Library/Application Support/Google/Chrome/JobHunterLinkedIn"
+# Log in via Google (yashdeshmukh7@gmail.com). Close Chrome.
+
+# Naukri
+open -a "Google Chrome" --args \
+  --user-data-dir="$HOME/Library/Application Support/Google/Chrome/JobHunterNaukri"
+# Log in. Close Chrome.
+
+# Repeat for: indeed, instahyre, wellfound, weworkremotely, hirist, cutshort
+```
+
+Then update `config/settings.toml` with the profile paths:
+
+```toml
+[chrome_profiles]
+linkedin       = "/Users/yashdeshmukh/Library/Application Support/Google/Chrome/JobHunterLinkedIn"
+naukri         = "/Users/yashdeshmukh/Library/Application Support/Google/Chrome/JobHunterNaukri"
+indeed         = "/Users/yashdeshmukh/Library/Application Support/Google/Chrome/JobHunterIndeed"
+instahyre      = "/Users/yashdeshmukh/Library/Application Support/Google/Chrome/JobHunterInstahyre"
+wellfound      = "/Users/yashdeshmukh/Library/Application Support/Google/Chrome/JobHunterWellfound"
+weworkremotely = "/Users/yashdeshmukh/Library/Application Support/Google/Chrome/JobHunterWeWorkRemotely"
+hirist         = "/Users/yashdeshmukh/Library/Application Support/Google/Chrome/JobHunterHirist"
+cutshort       = "/Users/yashdeshmukh/Library/Application Support/Google/Chrome/JobHunterCutShort"
+```
+
+### Step 7 — Test scraper for one platform
+
+```bash
+python -m src.run_daily --only scraper --dry-run
+```
+
+Verify rows appeared:
+
+```bash
+python -m src.run_daily --status-summary
+```
+
+Should show N rows with `status=scraped`.
+
+### Step 8 — Test filter + apply (dry-run, no submission)
+
+```bash
+python -m src.run_daily --only apply --dry-run
+```
+
+Logs show which jobs pass the filter and what fields would be submitted. No form is touched.
+
+### Step 9 — Test digest email
+
+```bash
+python -m src.run_daily --only notify
+```
+
+Check `yashdeshmukh7@gmail.com` for the digest. If Gmail rejects the connection, verify the App Password and that 2FA + App Passwords are enabled on the account.
+
+### Step 10 — Full dry-run end-to-end
+
+```bash
+python -m src.run_daily --dry-run
+```
+
+All 5 agents must complete without crashing. This is the gate before going live.
+
+### Step 11 — First live run
+
+```bash
+python -m src.run_daily --live
+```
+
+Check outcomes:
+
+```bash
+python -m src.run_daily --status-summary
+```
+
+For any skipped platforms, fix the issue then retry:
+
+```bash
+python -m src.run_daily --retry-platform <name>
+# or retry everything at once:
+python -m src.run_daily --retry-skipped
+```
+
+### Quick checklist
+
+| # | Command | Pass condition |
+|---|---|---|
+| 3 | `pytest src/tests/ -v` | 138/138 |
+| 4 | `--dry-run` | CSV + sidecar created, no crash |
+| 5 | `encrypt_creds.py` | `config/credentials.enc` written |
+| 6 | Chrome profiles | All 8 platforms logged in |
+| 7 | `--only scraper --dry-run` | Rows in CSV with `scraped` status |
+| 8 | `--only apply --dry-run` | Filter logs shown, no submission |
+| 9 | `--only notify` | Digest arrives in inbox |
+| 10 | `--dry-run` (full) | All 5 agents complete |
+| 11 | `--live` | Applications submitted or `manual_review` |
 
 ---
 
@@ -186,10 +351,10 @@ Add these two lines:
 
 ```cron
 # Daily pipeline at 7:00 PM IST (UTC+5:30 = 13:30 UTC)
-30 13 * * * /usr/bin/env bash -c 'source /Users/yashdeshmukh/.zshenv && cd /Users/yashdeshmukh/Desktop/job-hunter && python -m src.run_daily --live >> /tmp/job-hunter-daily.log 2>&1'
+30 13 * * * /usr/bin/env bash -c 'source /Users/yashdeshmukh/.zshenv && cd /Users/yashdeshmukh/Desktop/superset/job-hunter && python -m src.run_daily --live >> /tmp/job-hunter-daily.log 2>&1'
 
 # Interview brief poller at 9:00 PM IST daily (15:30 UTC) — briefs for next-day interviews
-30 15 * * * /usr/bin/env bash -c 'source /Users/yashdeshmukh/.zshenv && cd /Users/yashdeshmukh/Desktop/job-hunter && python -m src.run_brief_poller >> /tmp/job-hunter-poller.log 2>&1'
+30 15 * * * /usr/bin/env bash -c 'source /Users/yashdeshmukh/.zshenv && cd /Users/yashdeshmukh/Desktop/superset/job-hunter && python -m src.run_brief_poller >> /tmp/job-hunter-poller.log 2>&1'
 ```
 
 > **Note:** macOS cron runs in UTC. 7:00 PM IST = 13:30 UTC.
@@ -210,7 +375,7 @@ Create `~/Library/LaunchAgents/com.yash.job-hunter-daily.plist`:
         <string>/usr/bin/env</string>
         <string>bash</string>
         <string>-c</string>
-        <string>source ~/.zshenv &amp;&amp; cd ~/Desktop/job-hunter &amp;&amp; python -m src.run_daily --live</string>
+        <string>source ~/.zshenv &amp;&amp; cd ~/Desktop/superset/job-hunter &amp;&amp; python -m src.run_daily --live</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
