@@ -252,12 +252,28 @@ def read_by_status(status: str) -> list[dict]:
     return _rows_to_dicts(filtered)
 
 
-def get_companies() -> set[str]:
-    """Return the set of normalised company names already in the CSV.
+def get_seen_urls() -> set[str]:
+    """Return every job URL already recorded, canonicalised for comparison.
 
-    Used by the dedup gate in the filter module — no integrity check needed
-    for a fast lookup (worst case: we skip a company we've actually not
-    applied to yet, which is safe).
+    This is the dedup key.  It replaced company-level dedup, which was wrong
+    twice over: overlapping poll windows re-surface the same posting each run
+    (so URL dedup is *required*), and excluding an entire company because one
+    of its roles was once scraped permanently hid every future role there.
+    """
+    rows = _read_raw()
+    url_idx = HEADERS.index("url")
+    return {
+        r[url_idx].split("?")[0].split("#")[0].rstrip("/").lower()
+        for r in rows
+        if len(r) > url_idx and r[url_idx]
+    }
+
+
+def get_companies() -> set[str]:
+    """Normalised company names already in the CSV.
+
+    No longer used for dedup (see :func:`get_seen_urls`) — retained because the
+    digest reports per-company counts.
     """
     rows = _read_raw()
     company_idx = HEADERS.index("company")

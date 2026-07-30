@@ -1,19 +1,32 @@
 [general]
-enabled_plugins = [
-  "linkedin", "naukri", "indeed", "instahyre",
-  "wellfound", "weworkremotely", "hirist", "cutshort"
-]
+# Only platforms proven to work live belong here. The other seven plugins have
+# never been run against a real board; they stay on disk but out of the run
+# until each earns its way back in.
+enabled_plugins = ["linkedin"]
 
 [search]
 keywords  = [
   "Senior Backend Engineer", "SDE 2", "SDE 3",
   "Staff Engineer", "Lead Backend Engineer", "Senior Software Engineer"
 ]
-locations = ["Pune", "Bengaluru", "Hyderabad", "Remote"]
+locations = ["Pune", "Bengaluru", "Hyderabad", "India"]
+
+[poll]
+# Strategy 1: reach postings while they still have single-digit applicant
+# counts. A once-daily run cannot do this — a 60-minute window at 7 PM sees
+# only 6-7 PM postings and misses the other ten hours.
+interval_minutes = 30
+# Window is deliberately wider than the interval so a posting cannot fall
+# through the gap between two runs. The overlap re-surfaces jobs, which URL
+# dedup absorbs.
+window_seconds   = 3600
+active_start_ist = 8
+active_end_ist   = 22
 
 [limits]
-scrape_per_platform        = 5
-apply_attempts_per_platform = 5
+# No scrape cap: a 60-minute window is naturally small, and truncating it would
+# discard the newest postings, which are the entire point.
+apply_attempts_per_run = 5
 
 [filter]
 min_ctc_lpa    = 38.0
@@ -26,27 +39,25 @@ titles = [
 ]
 
 [schedule]
-daily_run_cron  = "30 13 * * *"   # 7:00 PM IST = 13:30 UTC
 brief_poll_cron = "30 15 * * *"   # 9:00 PM IST = 15:30 UTC
 
 [paths]
 resume_pdf = "config/resume.pdf"
+resume_dir = "~/Desktop/cognizant/interview/resumes"
 
 [runtime]
-headless  = true
-timezone  = "Asia/Kolkata"
-
-[chrome_profiles]
-linkedin        = ""
-naukri          = ""
-indeed          = ""
-instahyre       = ""
-wellfound       = ""
-weworkremotely  = ""
-hirist          = ""
-cutshort        = ""
+timezone = "Asia/Kolkata"
 
 [notify]
 digest_recipient = "yashdeshmukh7@gmail.com"
 smtp_host        = "smtp.gmail.com"
 smtp_port        = 587
+
+[funding]
+# Strategy 3: newly funded startups hire before they post. Free RSS; no
+# Crunchbase API.
+enabled = true
+feeds = [
+  "https://inc42.com/feed/",
+  "https://entrackr.com/feed/"
+]
