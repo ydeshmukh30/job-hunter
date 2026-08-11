@@ -71,28 +71,26 @@ job-hunter/
 pip install -r requirements.txt
 playwright install chromium
 
-# Run pipeline (dry-run, safe, default)
-python -m src.run_daily --dry-run
+# ONE-TIME: sign in to LinkedIn in the dedicated Chrome profile, then close it
+python -m src.run_poller --login
 
-# Run pipeline (live, actually submits)
-python -m src.run_daily --live
+# ONE-TIME: compile the six resume variants to PDF (auto-apply uploads a PDF)
+brew install tectonic && ./scripts/build_resumes.sh
 
-# Check if today's 7 PM run happened
-python -m src.run_daily --check
+# Which selectors match on the live page? Run this when a poll returns nothing.
+python -m src.run_poller --probe
 
-# Run a single agent manually
-python -m src.run_daily --only scraper --dry-run
+# One poll cycle (dry-run, safe, default). launchd calls this every 30 min.
+python -m src.run_poller
 
-# Status summary (per-status counts + unretried skipped items)
-python -m src.run_daily --status-summary
+# Same, but actually submits Easy Apply forms
+python -m src.run_poller --live
 
-# Retry all skipped platforms and manual_review jobs (after manual intervention)
-python -m src.run_daily --retry-skipped
+# Daily digest email
+python -m src.run_digest --dry-run
+python -m src.run_digest
 
-# Retry a single platform only
-python -m src.run_daily --retry-platform linkedin
-
-# Run interview brief poller
+# Interview brief poller
 python -m src.run_brief_poller
 
 # Tests
@@ -104,12 +102,18 @@ pytest src/tests/ -v
 All secrets come ONLY from environment variables (never committed).
 
 ```
-MASTER_CRYPTO_KEY       Fernet key for encrypting stored credentials
 GMAIL_APP_PASSWORD      Gmail App Password (not your main password)
 ANTHROPIC_API_KEY       Anthropic API key for interview briefs
 ANTHROPIC_MODEL         e.g. claude-sonnet-4-6
 DAILY_LLM_USD_CAP       e.g. 1.00 (hard cap in USD)
+NTFY_TOPIC              Long random string — your ntfy.sh push channel.
+                        Anyone who knows it can read your notifications.
+                        Must be set inside the launchd plist: launchd agents
+                        do not read your shell profile.
 ```
+
+`MASTER_CRYPTO_KEY` is gone. The Fernet credential vault was deleted along with
+every automated-login path — see "One dedicated Chrome profile" below.
 
 ## Architecture Decisions
 
@@ -125,37 +129,78 @@ The CSV is the single source of truth. Every write recomputes the SHA-256 sideca
 ### Plugin-based scrapers (adapted from santifer/career-ops provider pattern)
 Each platform is a single file in `src/scrapers/plugins/`. The manager auto-discovers enabled plugins from `settings.toml`. To add a platform: drop one file in the plugins directory.
 
-### Pre-logged-in Chrome profiles + automatic re-login
-Each platform uses a persistent Chrome user-data-dir (configured in `settings.toml → chrome_profiles`). The scraper checks for session expiry on every run and re-logs in automatically if needed:
+### One dedicated Chrome profile, signed in once
+All platforms share `~/.chrome-jobhunter`, a Chrome profile the user signs into
+manually one time (`python -m src.run_poller --login`). Playwright reuses it via
+`launch_persistent_context`. No stored credentials, no automated login, no
+CAPTCHA loop — which is why the Fernet vault, `encrypt_creds.py`, and every
+per-platform `login()` method were deleted.
 
-- **LinkedIn:** Google SSO — clicks "Sign in with Google", selects `yashdeshmukh7@gmail.com`
-- **All other platforms:** username/password from `config/credentials.enc` (Fernet-encrypted, key from `MASTER_CRYPTO_KEY`)
+Two constraints, both verified by testing rather than assumed:
 
-Credentials are decrypted in memory only, never logged. Set up credentials once with `python src/scrapers/encrypt_creds.py`.
+- **Chrome ≥136 refuses `--remote-debugging-port` on the default profile** — a
+  deliberate defence against cookie-stealing malware. Chrome here is 150, so
+  Yash's everyday profile cannot be automated by any approach. Migrating its
+  cookies is also not an option: that is the malware pattern, and tooling
+  blocks it.
+- **`connect_over_cdp` was broken and now works.** It failed the handshake on
+  Playwright 1.60 + Chrome 150 with `Browser.setDownloadBehavior: Browser
+  context management is not supported`. Re-tested 2026-08-11 on Chrome
+  151.0.7922.76: port opens, handshake completes, pages drive fine.
+
+Consequence: `--login` now opens the window with `--remote-debugging-port=9222`
+and `session()` attaches to it if it is up, leaving it running afterwards. The
+login window should stay open, not be closed. If a Chrome holds the profile
+*without* a port, it cannot be attached to and cannot be given one — close it
+and re-run `--login`.
+
+### Daily 24-hour sweep
+`f_TPR` takes a window in seconds and **requires an `r` prefix** — a bare
+`f_TPR=86400` is silently ignored, so the filter looks applied while doing
+nothing. Window is 24 hours, run once daily. This replaced the 30-minute
+Strategy 1 loop because the action is now recruiter outreach on top-applicant
+jobs, and that ranking needs an applicant pool to exist at all. launchd, not
+cron — this laptop sleeps, and cron drops every slot it slept through.
+
+**Pagination is mandatory at this window.** LinkedIn serves 25 results a page
+via `&start=N`. One page was the whole of a 60-minute window and is a small
+slice of a 24-hour one, and the truncation is silent. The scraper walks pages
+until one returns nothing new, capped by `limits.max_pages_per_location`.
 
 ### Self-learning apply form mappings
-`src/apply/form_profile.json` has a `learned_mappings` section. When the applier encounters an unknown field label, it prompts the user via `input()`, persists the answer, and uses it for future applications. This is borrowed from the career-ops form-handling pattern.
+`src/apply/form_profile.json` has a `learned_mappings` section. **Under the
+poller there is no tty**, so an unknown field must abort the application and
+fire a notification. It must never call `input()`: that would hang the run
+forever holding the Chrome profile lock, wedging every subsequent poll.
 
 ### Dry-run by default
-`--live` is required to actually submit applications. All scraping, filtering, and email always run regardless. Only the final form submission is gated by `--live`.
+`--live` is required to actually submit applications. All scraping, filtering,
+and email always run regardless. Only the final form submission is gated.
 
 ## Filter Logic
 
 Keep a job ONLY if ALL hold:
 1. Full-time role
-2. Title matches (fuzzy, case-insensitive): SDE 2, SDE 3, Senior Software Engineer, Senior Backend Engineer, Lead Engineer, Staff Engineer
+2. Title passes three gates: no disqualifier (intern/QA/sales/manager/director),
+   contains an IC engineering token, and carries a seniority signal. The old
+   Jaccard-over-stopword-stripped-tokens matcher admitted "QA Engineer".
 3. Compensation/YOE rule:
-   - INR CTC range parseable → keep if 38 LPA ∈ [min, max]
-   - Else YOE range present → keep if 5 ∈ [min, max]
-   - Else → KEEP (covers: CTC not stated, foreign currency USD/GBP/SGD/etc., "Competitive")
+   - INR CTC parseable → keep if **max ≥ 38 LPA**. NOT band-containment: the old
+     `min <= 38 <= max` rejected "45-60 LPA" because `45 <= 38` is false, which
+     threw away exactly the best-paying jobs.
+   - Else YOE range present → keep if 5 ∈ [min−1, max]. One year of stretch.
+   - Else → KEEP (CTC not stated, foreign currency, "Competitive")
 4. Location ∈ {Pune, Bengaluru, Hyderabad, Remote}
-5. Company not already in the tracker (dedup by company)
+5. **Job URL** not already in the tracker
 
 ## Caps
 
-- Scrape: 5 listings per platform
-- Apply attempts: 5 per platform
-- Dedup: by company (one row per company in the CSV)
+- Scrape: `max_pages_per_location = 8` (up to 200 postings per location). A
+  ceiling, not a target — pagination stops on the first page with nothing new.
+- Apply attempts: 5 per run
+- Dedup: by canonical job URL (query string and fragment stripped). NOT by
+  company — that permanently hid every future role at any company once one of
+  its roles had been seen.
 
 ## Data Model (CSV headers)
 

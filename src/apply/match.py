@@ -16,22 +16,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Stop-words stripped before tokenising job titles
+# Title gates
+#
+# The previous implementation stripped "senior"/"lead"/"staff"/"principal" as
+# stop-words and then ran a Jaccard similarity over what was left.  Those words
+# ARE the filter — removing them left `{engineer}`, and `Jaccard >= 0.5` then
+# admitted "QA Engineer", "Sales Engineer" and anything else ending in
+# "Engineer".  Three explicit gates are both stricter and easier to reason about.
 # ---------------------------------------------------------------------------
-_TITLE_STOPWORDS: frozenset[str] = frozenset(
-    {
-        "senior",
-        "lead",
-        "staff",
-        "principal",
-        "remote",
-        "india",
-        "bangalore",
-        "pune",
-        "hyderabad",
-        "at",
-        "for",
-    }
+
+# Disqualifying immediately, regardless of anything else.
+_REJECT_RE = re.compile(
+    r"\b("
+    r"intern(ship)?|fresher|graduate|trainee|junior|jr\.?|apprentice|entry[\s-]?level"
+    r"|qa|sdet|tester|test\s+engineer|automation\s+tester"
+    r"|sales|recruit\w*|talent|support\s+engineer|customer\s+success"
+    r"|engineering\s+manager|people\s+manager|director|vp\b|head\s+of|chief"
+    r")\b",
+    flags=re.IGNORECASE,
+)
+
+# Must look like an individual-contributor engineering role.
+_CORE_RE = re.compile(
+    r"\b(engineer|engineering|developer|sde|swe|programmer|architect)\b",
+    flags=re.IGNORECASE,
+)
+
+# Must carry a senior signal.  Covers "SDE 2", "SDE-3", "SDE3", "Engineer II".
+_SENIORITY_RE = re.compile(
+    r"\b(senior|sr\.?|staff|principal|lead|sde\s*-?\s*[23]|sde[23]|ii+|[23])\b",
+    flags=re.IGNORECASE,
 )
 
 # ---------------------------------------------------------------------------
@@ -80,16 +94,19 @@ _ALLOWED_LOCATIONS: frozenset[str] = frozenset(
 
 def filter_jobs(
     jobs: list[dict],
-    existing_companies: set[str],
+    seen_urls: set[str],
     settings,
 ) -> list[dict]:
     """Apply all 5 gates sequentially.  Return jobs that pass every gate.
 
     Args:
-        jobs:               Raw list of scraped job dicts.
-        existing_companies: Company names already present in the CSV tracker.
-        settings:           A ``Settings`` dataclass with ``min_ctc_lpa``,
-                            ``target_yoe``, and ``titles`` attributes.
+        jobs:       Raw list of scraped job dicts.
+        seen_urls:  Job URLs already recorded in the CSV.  Dedup is by URL, not
+                    by company: overlapping poll windows re-surface the same
+                    posting every run, and excluding a whole company because one
+                    of its roles was once scraped silently starves the pipeline.
+        settings:   A ``Settings`` dataclass with ``min_ctc_lpa``,
+                    ``target_yoe``, and ``titles`` attributes.
 
     Returns:
         Subset of *jobs* that passed all 5 gates, preserving original order.
@@ -98,6 +115,7 @@ def filter_jobs(
     allowed_titles: list[str] = settings.titles
     target_ctc: float = settings.min_ctc_lpa
     target_yoe: int = settings.target_yoe
+    seen = {_canonical_url(u) for u in seen_urls}
 
     for job in jobs:
         title: str = job.get("title", "") or ""
@@ -126,9 +144,9 @@ def filter_jobs(
             logger.debug("Gate 4 FAIL (location=%s): %s @ %s", location, title, company)
             continue
 
-        # Gate 5 — company dedup
-        if normalize_company(company) in {normalize_company(c) for c in existing_companies}:
-            logger.debug("Gate 5 FAIL (dupe company): %s", company)
+        # Gate 5 — URL dedup
+        if _canonical_url(job.get("url", "")) in seen:
+            logger.debug("Gate 5 FAIL (already seen): %s @ %s", title, company)
             continue
 
         passed.append(job)
@@ -147,44 +165,37 @@ def is_full_time(job: dict) -> bool:
     return not bool(_NON_FULLTIME_RE.search(text))
 
 
-def _normalise_title_tokens(title: str) -> frozenset[str]:
-    """Lowercase, strip stop-words, tokenise on non-alphanumeric characters."""
-    lowered = title.lower()
-    # Split on any non-alphanumeric character
-    tokens = re.split(r"[^a-z0-9]+", lowered)
-    return frozenset(t for t in tokens if t and t not in _TITLE_STOPWORDS)
+def _canonical_url(url: str) -> str:
+    """Strip query/fragment and trailing slash so a URL is a stable dedup key.
+
+    LinkedIn appends per-impression tracking params, so the raw href differs
+    between polls for the same posting.
+    """
+    if not url:
+        return ""
+    return url.split("?")[0].split("#")[0].rstrip("/").lower()
 
 
 def title_matches(title: str, allowed_titles: list[str]) -> bool:
-    """Fuzzy Jaccard match between *title* and any entry in *allowed_titles*.
+    """Three gates, all of which must hold.
 
-    Normalisation:
-    - Lowercase
-    - Strip stop-words: senior, lead, staff, principal, remote, india,
-      bangalore, pune, hyderabad, at, for
-    - Tokenise on non-alphanumeric boundaries
-
-    Match criterion (must satisfy **both**):
-    - Jaccard(title_tokens, allowed_tokens) >= 0.5
-    - len(shared_tokens) >= 1
+    1. No disqualifying token (intern, QA, sales, manager, director, …).
+    2. Looks like an IC engineering role (engineer / developer / SDE / SWE / …).
+    3. Carries a seniority signal — OR matches a configured title verbatim,
+       which lets ``settings.titles`` admit shapes the regex would miss.
     """
-    job_tokens = _normalise_title_tokens(title)
-    if not job_tokens:
+    if not title:
         return False
+    t = title.lower()
 
-    for allowed in allowed_titles:
-        allowed_tokens = _normalise_title_tokens(allowed)
-        if not allowed_tokens:
-            continue
-        shared = job_tokens & allowed_tokens
-        if not shared:
-            continue
-        union = job_tokens | allowed_tokens
-        jaccard = len(shared) / len(union)
-        if jaccard >= 0.5 and len(shared) >= 1:
-            return True
+    if _REJECT_RE.search(t):
+        return False
+    if not _CORE_RE.search(t):
+        return False
+    if _SENIORITY_RE.search(t):
+        return True
 
-    return False
+    return any(a.lower() in t for a in allowed_titles if a)
 
 
 def ctc_matches(
@@ -195,21 +206,27 @@ def ctc_matches(
 ) -> bool:
     """Three-branch CTC / YOE gate.
 
-    Branch 1: If ``parse_ctc_lpa(ctc_str)`` succeeds → pass iff
-              ``target_ctc`` ∈ [min_lpa, max_lpa].
+    Branch 1: If ``parse_ctc_lpa(ctc_str)`` succeeds → pass iff the top of the
+              band reaches ``target_ctc``.  This deliberately is NOT
+              ``min <= target <= max``: that form rejected every posting paying
+              MORE than the target ("45-60 LPA" against a 38 target failed on
+              ``45 <= 38``), which threw away exactly the best jobs.
     Branch 2: Else if ``parse_yoe_range(yoe_str)`` succeeds → pass iff
-              ``target_yoe`` ∈ [min_yoe, max_yoe].
+              ``target_yoe`` is at or above the floor.  A 5-YOE candidate is a
+              legitimate applicant to a "6-10 years" posting; the ceiling is
+              aspirational, the floor is the real gate.  Allow one year of
+              stretch below the floor.
     Branch 3: Else (neither parseable, foreign currency included) → True.
     """
     ctc_range = parse_ctc_lpa(ctc_str)
     if ctc_range is not None:
-        min_lpa, max_lpa = ctc_range
-        return min_lpa <= target_ctc <= max_lpa
+        _min_lpa, max_lpa = ctc_range
+        return max_lpa >= target_ctc
 
     yoe_range = parse_yoe_range(yoe_str)
     if yoe_range is not None:
         min_yoe, max_yoe = yoe_range
-        return min_yoe <= target_yoe <= max_yoe
+        return (min_yoe - 1) <= target_yoe <= max_yoe
 
     # Neither parseable — keep
     return True

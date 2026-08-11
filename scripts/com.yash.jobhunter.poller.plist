@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minutes-old job poller — every 30 minutes.
+
+  launchd rather than cron: this laptop sleeps, and cron silently drops every
+  slot it was asleep for. launchd fires a missed StartInterval on wake, which
+  for a 22-runs-a-day poller is most of the coverage.
+
+  Install:
+      cp scripts/com.yash.jobhunter.poller.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.yash.jobhunter.poller.plist
+  Check:
+      launchctl list | grep jobhunter
+      tail -f ~/Desktop/superset/job-hunter/src/data/poller.log
+  Remove:
+      launchctl unload ~/Library/LaunchAgents/com.yash.jobhunter.poller.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.yash.jobhunter.poller</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/yashdeshmukh/Desktop/superset/job-hunter/.venv/bin/python</string>
+        <string>-m</string>
+        <string>src.run_poller</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/yashdeshmukh/Desktop/superset/job-hunter</string>
+
+    <!-- 30 minutes. Active-hours gating happens inside the process so the
+         window can change without touching launchd. -->
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- NTFY_TOPIC must be set here: launchd agents do not read your shell
+             profile, so an export in .zshrc is invisible to this job. -->
+        <key>NTFY_TOPIC</key>
+        <string>REPLACE_WITH_A_LONG_RANDOM_STRING</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/yashdeshmukh/Desktop/superset/job-hunter/src/data/poller.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/yashdeshmukh/Desktop/superset/job-hunter/src/data/poller.log</string>
+</dict>
+</plist>
