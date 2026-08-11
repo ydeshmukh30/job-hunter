@@ -5,6 +5,9 @@ config/credentials.enc
 # Data (user-specific, committed separately after each run)
 # Note: CSV IS committed (it's the source of truth). Only these are excluded:
 src/data/*.lock
+# Raw HTML dumps from --probe. Large, and they contain a logged-in view of
+# Yash's LinkedIn.
+src/data/probe/
 
 # Python
 __pycache__/

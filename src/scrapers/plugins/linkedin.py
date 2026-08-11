@@ -92,17 +92,26 @@ class LinkedInScraper(BaseScraper):
     # URL construction
     # ------------------------------------------------------------------ #
 
+    # LinkedIn serves job search in pages of 25, addressed by `start`.
+    PAGE_SIZE = 25
+
     @staticmethod
-    def build_search_url(keywords: list[str], location: str, window_seconds: int) -> str:
+    def build_search_url(
+        keywords: list[str], location: str, window_seconds: int, start: int = 0
+    ) -> str:
         """Build an authenticated job-search URL for a time window.
 
         ``f_TPR`` MUST carry the ``r`` prefix; without it LinkedIn ignores the
         filter entirely and returns the unfiltered feed.  ``f_JT=F`` is a
         server-side full-time filter, free of charge.
+
+        ``start`` is the pagination offset.  Driving it through the URL beats
+        clicking a next button: no reliance on a pager selector that LinkedIn
+        renames, and a failed page does not lose the ones after it.
         """
         kw = quote_plus(" OR ".join(f'"{k}"' for k in keywords))
         loc = quote_plus(location)
-        return (
+        url = (
             "https://www.linkedin.com/jobs/search/"
             f"?keywords={kw}"
             f"&location={loc}"
@@ -110,6 +119,7 @@ class LinkedInScraper(BaseScraper):
             "&f_JT=F"
             "&sortBy=DD"
         )
+        return url if start <= 0 else f"{url}&start={int(start)}"
 
     # ------------------------------------------------------------------ #
     # Scrape
@@ -122,38 +132,73 @@ class LinkedInScraper(BaseScraper):
         locations: list[str],
         window_seconds: int,
         limit: int | None = None,
+        max_pages: int = 8,
     ) -> list[JobDict]:
-        """Scrape every location in *locations* using an existing CDP context."""
+        """Scrape every location in *locations* using an existing CDP context.
+
+        Paginates.  A single page is 25 results, which was the whole of a
+        60-minute window but is a small slice of a 24-hour one — and the cut is
+        silent, so the run looks healthy while dropping most of the day.  Worse,
+        the filter then runs on those 25 and keeps maybe a handful, so the
+        shortfall compounds.
+        """
         jobs: list[JobDict] = []
         seen_urls: set[str] = set()
 
         for location in locations:
-            url = self.build_search_url(keywords, location, window_seconds)
-            page = await context.new_page()
-            try:
-                await page.goto(url, timeout=45_000, wait_until="domcontentloaded")
-                # Give the virtualised list a beat, then nudge it to render.
-                await asyncio.sleep(random.uniform(1.5, 3.0))
-                await self._nudge_list(page)
+            for page_no in range(max_pages):
+                start = page_no * self.PAGE_SIZE
+                url = self.build_search_url(keywords, location, window_seconds, start)
+                page = await context.new_page()
+                try:
+                    await page.goto(url, timeout=45_000, wait_until="domcontentloaded")
+                    # Give the virtualised list a beat, then nudge it to render.
+                    await asyncio.sleep(random.uniform(1.5, 3.0))
+                    await self._nudge_list(page)
 
-                cards, used = await self._find_cards(page)
-                if not cards:
-                    log.warning("linkedin[%s]: no job cards matched any selector", location)
-                    continue
-                log.info("linkedin[%s]: %d cards via %r", location, len(cards), used)
+                    cards, used = await self._find_cards(page)
+                    if not cards:
+                        if page_no == 0:
+                            log.warning(
+                                "linkedin[%s]: no job cards matched any selector", location
+                            )
+                        else:
+                            log.info("linkedin[%s]: page %d empty — end of results",
+                                     location, page_no + 1)
+                        break
 
-                for card in cards:
-                    job = await self._parse_card(card, location)
-                    if job is None or job["url"] in seen_urls:
-                        continue
-                    seen_urls.add(job["url"])
-                    jobs.append(job)
-                    if limit is not None and len(jobs) >= limit:
-                        return jobs
-            except Exception as exc:
-                log.warning("linkedin[%s]: scrape failed: %s", location, exc)
-            finally:
-                await page.close()
+                    added = 0
+                    for card in cards:
+                        job = await self._parse_card(card, location)
+                        if job is None or job["url"] in seen_urls:
+                            continue
+                        seen_urls.add(job["url"])
+                        jobs.append(job)
+                        added += 1
+                        if limit is not None and len(jobs) >= limit:
+                            return jobs
+
+                    log.info(
+                        "linkedin[%s] page %d: %d cards via %r, %d new",
+                        location, page_no + 1, len(cards), used, added,
+                    )
+
+                    # Every URL already seen means LinkedIn is replaying the
+                    # last page rather than paging on — the usual signal that
+                    # the result set is exhausted.
+                    if added == 0:
+                        break
+                    if len(cards) < self.PAGE_SIZE:
+                        break
+                except Exception as exc:
+                    log.warning("linkedin[%s] page %d: scrape failed: %s", location, page_no + 1, exc)
+                    break
+                finally:
+                    await page.close()
+
+                # Pace the requests. Eight pages across four locations back to
+                # back is the shape of a scraper, not a person reading jobs.
+                await asyncio.sleep(random.uniform(2.0, 4.5))
 
         return jobs
 
@@ -252,6 +297,153 @@ class LinkedInScraper(BaseScraper):
             return report
         finally:
             await page.close()
+
+    # ------------------------------------------------------------------ #
+    # Detail-page probe
+    # ------------------------------------------------------------------ #
+
+    async def probe_detail(
+        self,
+        context: BrowserContext,
+        job_url: str,
+        dump_dir,
+        open_apply_modal: bool = False,
+    ) -> dict:
+        """Dump what a job detail page actually contains.
+
+        Phrase matching over rendered text, not class names.  LinkedIn renames
+        classes constantly but the words a Premium member reads ("You're a top
+        applicant", "Meet the hiring team") are product copy and change far more
+        slowly.  The raw HTML is written to disk regardless, because that is the
+        only ground truth worth writing selectors against.
+        """
+        page = await context.new_page()
+        try:
+            await page.goto(job_url, timeout=45_000, wait_until="domcontentloaded")
+            await asyncio.sleep(3.0)
+            await self._nudge_list(page)
+
+            html = await page.content()
+            stamp = datetime.now(tz=IST).strftime("%Y%m%d-%H%M%S")
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            dump_path = dump_dir / f"{stamp}-detail.html"
+            dump_path.write_text(html, encoding="utf-8")
+
+            body = await page.inner_text("body")
+            low = body.lower()
+
+            report: dict = {
+                "url": page.url,
+                "html_dump": str(dump_path),
+                "text_chars": len(body),
+                # Does the ranking signal exist BEFORE applying?  The whole
+                # apply-then-message ordering hangs on this answer.
+                "ranking_signal": {
+                    phrase: (phrase in low)
+                    for phrase in (
+                        "top applicant",
+                        "top 5%",
+                        "top 10%",
+                        "top 25%",
+                        "top 50%",
+                        "how you compare",
+                        "applicant insights",
+                        "among the first",
+                        "premium",
+                    )
+                },
+                # Is there a human to message at all?  Many posts expose nobody.
+                "hiring_team": {
+                    phrase: (phrase in low)
+                    for phrase in (
+                        "meet the hiring team",
+                        "job poster",
+                        "posted by",
+                        "send inmail",
+                        "message",
+                    )
+                },
+                "apply_button": {},
+                "applicant_count_lines": [
+                    line.strip()
+                    for line in body.splitlines()
+                    if "applicant" in line.lower() and len(line.strip()) < 120
+                ][:10],
+            }
+
+            for label, sel in (
+                ("easy_apply", "button.jobs-apply-button"),
+                ("apply_any", "button:has-text('Apply')"),
+                ("message_button", "button:has-text('Message')"),
+                ("connect_button", "button:has-text('Connect')"),
+                ("poster_link", "a[href*='/in/']"),
+            ):
+                try:
+                    report["apply_button"][label] = len(await page.query_selector_all(sel))
+                except Exception:
+                    report["apply_button"][label] = -1
+
+            if open_apply_modal:
+                report["apply_form"] = await self._probe_apply_modal(page, dump_dir, stamp)
+
+            return report
+        finally:
+            await page.close()
+
+    async def _probe_apply_modal(self, page: Page, dump_dir, stamp: str) -> dict:
+        """Open the Easy Apply modal, list its fields, then discard it.
+
+        Never submits.  On dismissal LinkedIn offers to save a draft; we take
+        Discard so the probe leaves no half-finished application behind.
+        """
+        out: dict = {"opened": False, "fields": [], "note": ""}
+        try:
+            btn = await page.query_selector("button.jobs-apply-button")
+            if btn is None:
+                out["note"] = "no Easy Apply button on this posting"
+                return out
+            await btn.click()
+            await asyncio.sleep(3.0)
+            out["opened"] = True
+
+            (dump_dir / f"{stamp}-apply-modal.html").write_text(
+                await page.content(), encoding="utf-8"
+            )
+            out["modal_dump"] = str(dump_dir / f"{stamp}-apply-modal.html")
+
+            for el in await page.query_selector_all(
+                "div[role='dialog'] input, div[role='dialog'] select, div[role='dialog'] textarea"
+            ):
+                out["fields"].append(
+                    {
+                        "tag": await el.evaluate("e => e.tagName.toLowerCase()"),
+                        "type": await el.get_attribute("type"),
+                        "id": await el.get_attribute("id"),
+                        "name": await el.get_attribute("name"),
+                        "required": await el.get_attribute("required") is not None,
+                        "label": await el.evaluate(
+                            "e => { const l = e.labels && e.labels[0];"
+                            " return l ? l.innerText.trim() : (e.getAttribute('aria-label') || ''); }"
+                        ),
+                    }
+                )
+        except Exception as exc:
+            out["note"] = f"modal probe failed: {exc}"
+        finally:
+            # Escape, then take Discard if LinkedIn asks about saving a draft.
+            try:
+                await page.keyboard.press("Escape")
+                await asyncio.sleep(1.0)
+                discard = await page.query_selector(
+                    "button[data-control-name='discard_application_confirm_btn'],"
+                    " button:has-text('Discard')"
+                )
+                if discard is not None:
+                    await discard.click()
+                    await asyncio.sleep(1.0)
+            except Exception as exc:
+                out["note"] += f" | cleanup failed, check for a saved draft: {exc}"
+        return out
 
     # ------------------------------------------------------------------ #
     # BaseScraper compatibility

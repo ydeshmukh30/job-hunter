@@ -12,21 +12,22 @@ keywords  = [
 locations = ["Pune", "Bengaluru", "Hyderabad", "India"]
 
 [poll]
-# Strategy 1: reach postings while they still have single-digit applicant
-# counts. A once-daily run cannot do this — a 60-minute window at 7 PM sees
-# only 6-7 PM postings and misses the other ten hours.
-interval_minutes = 30
-# Window is deliberately wider than the interval so a posting cannot fall
-# through the gap between two runs. The overlap re-surfaces jobs, which URL
-# dedup absorbs.
-window_seconds   = 3600
+# 24-hour sweep, once a day. This replaces the earlier 30-minute / 60-minute
+# Strategy 1 loop by explicit decision: the action is now recruiter outreach on
+# jobs where LinkedIn ranks Yash a top applicant, and that ranking needs a
+# populated applicant pool to exist at all — which a minutes-old posting does
+# not have.
+interval_minutes = 1440
+window_seconds   = 86400
 active_start_ist = 8
 active_end_ist   = 22
 
 [limits]
-# No scrape cap: a 60-minute window is naturally small, and truncating it would
-# discard the newest postings, which are the entire point.
 apply_attempts_per_run = 5
+# LinkedIn pages job search 25 at a time. 8 pages = up to 200 postings per
+# location, which comfortably covers a 24-hour window; the scraper stops early
+# on the first page that returns nothing new, so this is a ceiling, not a cost.
+max_pages_per_location = 8
 
 [filter]
 min_ctc_lpa    = 38.0

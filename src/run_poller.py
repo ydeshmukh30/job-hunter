@@ -54,14 +54,43 @@ def _within_active_hours(settings) -> bool:
 _LOGIN_HINT = (
     "The job-hunter Chrome profile is not signed in to LinkedIn.\n"
     "Run `python -m src.run_poller --login`, sign in once in the window that\n"
-    "opens, then close it. The session persists for every later run.\n\n"
+    "opens, and leave it open. The session persists for every later run, and\n"
+    "later runs attach to that window rather than opening another.\n\n"
     "Your everyday Chrome profile cannot be used for this: Chrome >= 136\n"
     "refuses automation on the default profile by design, to stop malware\n"
     "reading your cookies."
 )
 
 
-async def _probe(settings) -> int:
+_PROBE_DIR = data_store.DATA_DIR / "probe"
+
+
+async def _inmail_credits(context) -> dict:
+    """Read the remaining InMail balance off the Premium page.
+
+    Premium Career grants about five credits a month, and that number is the
+    hard ceiling on the whole outreach feature — worth reading rather than
+    assuming.
+    """
+    page = await context.new_page()
+    try:
+        await page.goto("https://www.linkedin.com/premium/my-premium/", timeout=45_000)
+        await asyncio.sleep(3.0)
+        body = await page.inner_text("body")
+        return {
+            "lines": [
+                line.strip()
+                for line in body.splitlines()
+                if "inmail" in line.lower() or "credit" in line.lower()
+            ][:15]
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+    finally:
+        await page.close()
+
+
+async def _probe(settings, open_modal: bool = False) -> int:
     async with session() as context:
         if not await is_logged_in_linkedin(context):
             print(f"\nNOT AUTHENTICATED.\n\n{_LOGIN_HINT}", file=sys.stderr)
@@ -69,11 +98,32 @@ async def _probe(settings) -> int:
 
         scraper = LinkedInScraper()
         report = await scraper.probe(context, settings.keywords, settings.locations[0])
-        print(json.dumps(report, indent=2))
 
         if not any(n > 0 for n in report["selectors"]["card"].values()):
+            print(json.dumps(report, indent=2))
             print("\nNo card selector matched — LinkedIn changed its DOM.", file=sys.stderr)
             return 1
+
+        # One real posting, to answer the questions the search page cannot:
+        # is the top-applicant signal visible before applying, is there a human
+        # to message, and what does the Easy Apply form actually ask.
+        jobs = await scraper.scrape_context(
+            context,
+            keywords=settings.keywords,
+            locations=settings.locations[:1],
+            window_seconds=settings.window_seconds,
+            limit=1,
+        )
+        if jobs:
+            report["detail"] = await scraper.probe_detail(
+                context, jobs[0]["url"], _PROBE_DIR, open_apply_modal=open_modal
+            )
+            report["detail"]["job"] = {k: jobs[0][k] for k in ("title", "company", "apply_type")}
+        else:
+            report["detail"] = {"error": "no job in the window to open"}
+
+        report["inmail"] = await _inmail_credits(context)
+        print(json.dumps(report, indent=2))
     return 0
 
 
@@ -103,6 +153,7 @@ async def _cycle(settings, live: bool) -> int:
             keywords=settings.keywords,
             locations=settings.locations,
             window_seconds=settings.window_seconds,
+            max_pages=settings.max_pages_per_location,
         )
         log.info("scraped %d listings from the last %ds", len(scraped), settings.window_seconds)
         if not scraped:
@@ -149,6 +200,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Poll LinkedIn for minutes-old postings.")
     parser.add_argument("--login", action="store_true", help="open the profile to sign in, then exit")
     parser.add_argument("--probe", action="store_true", help="report selector health and exit")
+    parser.add_argument(
+        "--probe-modal",
+        action="store_true",
+        help="with --probe, also open one Easy Apply modal to list its fields "
+        "(never submits; discards the draft afterwards)",
+    )
     parser.add_argument("--live", action="store_true", help="actually submit applications")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -161,16 +218,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.login:
         open_for_login()
         print(
-            "Opened the job-hunter Chrome profile. Sign in to LinkedIn there, then\n"
-            "CLOSE that window — Chrome will not share a profile between two\n"
-            "processes, so the poller cannot run while it is open."
+            "Opened the job-hunter Chrome profile with a debugging port.\n"
+            "Sign in to LinkedIn there and LEAVE THE WINDOW OPEN — every later run\n"
+            "attaches to it instead of launching a second browser."
         )
         return 0
 
     settings = config.load()
 
-    if args.probe:
-        return asyncio.run(_probe(settings))
+    if args.probe or args.probe_modal:
+        return asyncio.run(_probe(settings, open_modal=args.probe_modal))
 
     data_store.DATA_DIR.mkdir(parents=True, exist_ok=True)
     try:

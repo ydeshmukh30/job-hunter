@@ -31,6 +31,7 @@ class Settings:
 
     # [limits]
     apply_attempts_per_run: int
+    max_pages_per_location: int
 
     # [filter]
     min_ctc_lpa: float
@@ -78,6 +79,15 @@ def _optional_env(name: str, default: str = "") -> str:
 
 def load(toml_path: Path | None = None) -> Settings:
     """Load and validate settings from settings.toml + environment variables."""
+    # Every entrypoint routes through here, so .env is read once, here. Only
+    # run_brief_poller used to call load_dotenv(), which meant GMAIL_APP_PASSWORD
+    # and NTFY_TOPIC in .env were silently invisible to the poller and digest.
+    # Real environment wins over the file, so launchd's plist vars still take
+    # precedence.
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env")
+
     toml_path = toml_path or ROOT / "config" / "settings.toml"
     if not toml_path.exists():
         raise ConfigError(f"Settings file not found: {toml_path}")
@@ -103,6 +113,7 @@ def load(toml_path: Path | None = None) -> Settings:
         active_start_ist=int(poll.get("active_start_ist", 8)),
         active_end_ist=int(poll.get("active_end_ist", 22)),
         apply_attempts_per_run=int(cfg["limits"]["apply_attempts_per_run"]),
+        max_pages_per_location=int(cfg["limits"].get("max_pages_per_location", 8)),
         min_ctc_lpa=float(cfg["filter"]["min_ctc_lpa"]),
         target_yoe=int(cfg["filter"]["target_yoe"]),
         full_time_only=bool(cfg["filter"]["full_time_only"]),

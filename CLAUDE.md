@@ -143,20 +143,29 @@ Two constraints, both verified by testing rather than assumed:
   Yash's everyday profile cannot be automated by any approach. Migrating its
   cookies is also not an option: that is the malware pattern, and tooling
   blocks it.
-- **`connect_over_cdp` fails on Playwright 1.60 + Chrome 150** with
-  `Browser.setDownloadBehavior: Browser context management is not supported`.
-  Playwright owns the browser; it does not attach to an external one.
+- **`connect_over_cdp` was broken and now works.** It failed the handshake on
+  Playwright 1.60 + Chrome 150 with `Browser.setDownloadBehavior: Browser
+  context management is not supported`. Re-tested 2026-08-11 on Chrome
+  151.0.7922.76: port opens, handshake completes, pages drive fine.
 
-Consequence: the profile is locked during a run, so the login window must be
-closed before the poller can drive it.
+Consequence: `--login` now opens the window with `--remote-debugging-port=9222`
+and `session()` attaches to it if it is up, leaving it running afterwards. The
+login window should stay open, not be closed. If a Chrome holds the profile
+*without* a port, it cannot be attached to and cannot be given one — close it
+and re-run `--login`.
 
-### Minutes-old polling (Strategy 1)
+### Daily 24-hour sweep
 `f_TPR` takes a window in seconds and **requires an `r` prefix** — a bare
-`f_TPR=1800` is silently ignored, so the filter looks applied while doing
-nothing. 30-minute interval, 60-minute window: the window is wider than the
-interval so a posting cannot fall through a gap, and the resulting overlap is
-absorbed by URL dedup. launchd, not cron — this laptop sleeps, and cron drops
-every slot it slept through.
+`f_TPR=86400` is silently ignored, so the filter looks applied while doing
+nothing. Window is 24 hours, run once daily. This replaced the 30-minute
+Strategy 1 loop because the action is now recruiter outreach on top-applicant
+jobs, and that ranking needs an applicant pool to exist at all. launchd, not
+cron — this laptop sleeps, and cron drops every slot it slept through.
+
+**Pagination is mandatory at this window.** LinkedIn serves 25 results a page
+via `&start=N`. One page was the whole of a 60-minute window and is a small
+slice of a 24-hour one, and the truncation is silent. The scraper walks pages
+until one returns nothing new, capped by `limits.max_pages_per_location`.
 
 ### Self-learning apply form mappings
 `src/apply/form_profile.json` has a `learned_mappings` section. **Under the
@@ -186,8 +195,8 @@ Keep a job ONLY if ALL hold:
 
 ## Caps
 
-- Scrape: none. A 60-minute window is naturally small, and truncating it would
-  discard the newest postings, which are the entire point.
+- Scrape: `max_pages_per_location = 8` (up to 200 postings per location). A
+  ceiling, not a target — pagination stops on the first page with nothing new.
 - Apply attempts: 5 per run
 - Dedup: by canonical job URL (query string and fragment stripped). NOT by
   company — that permanently hid every future role at any company once one of
