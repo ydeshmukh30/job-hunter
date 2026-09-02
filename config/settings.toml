@@ -1,22 +1,32 @@
+# CSM branch — Customer Success Manager applications for Vanshika Tewary.
+#
+# This branch re-points the pipeline at a different candidate and a different
+# role family. Only configuration and candidate data differ from
+# yash/feat/job-hunter-v2; no pipeline code is changed, so improvements to the
+# scrapers and appliers merge in cleanly from the base branch.
+#
+# Values marked [[NEED]] must be confirmed with the candidate before a --live
+# run. See docs/csm/gap-analysis.md.
+
 [general]
-# Only platforms proven to work live belong here. The other seven plugins have
-# never been run against a real board; they stay on disk but out of the run
-# until each earns its way back in.
+# Inherited from v2 unchanged: only LinkedIn is proven against a real board.
+# Naukri is the obvious next candidate for this role family — CSM hiring in
+# India runs heavily through it — but it earns its way in by being run, not by
+# being assumed.
 enabled_plugins = ["linkedin"]
 
 [search]
-keywords  = [
-  "Senior Backend Engineer", "SDE 2", "SDE 3",
-  "Staff Engineer", "Lead Backend Engineer", "Senior Software Engineer"
+# Derived from the LinkedIn CSM job-description template; see
+# docs/csm/keyword-map.md for the full 45-term map these are drawn from.
+keywords = [
+  "Customer Success Manager", "Senior Customer Success Manager",
+  "Enterprise Customer Success Manager", "Customer Success Lead",
+  "Client Success Manager", "Account Manager",
 ]
-locations = ["Pune", "Bengaluru", "Hyderabad", "India"]
+# Candidate is Bengaluru-based; Mumbai included as a prior home market.
+locations = ["Bengaluru", "Mumbai", "Pune", "India"]
 
 [poll]
-# 24-hour sweep, once a day. This replaces the earlier 30-minute / 60-minute
-# Strategy 1 loop by explicit decision: the action is now recruiter outreach on
-# jobs where LinkedIn ranks Yash a top applicant, and that ranking needs a
-# populated applicant pool to exist at all — which a minutes-old posting does
-# not have.
 interval_minutes = 1440
 window_seconds   = 86400
 active_start_ist = 8
@@ -24,39 +34,56 @@ active_end_ist   = 22
 
 [limits]
 apply_attempts_per_run = 5
-# LinkedIn pages job search 25 at a time. 8 pages = up to 200 postings per
-# location, which comfortably covers a 24-hour window; the scraper stops early
-# on the first page that returns nothing new, so this is a ceiling, not a cost.
 max_pages_per_location = 8
 
 [filter]
-min_ctc_lpa    = 38.0
-target_yoe     = 5
+# [[NEED: target compensation]] — 0.0 disables the CTC floor rather than
+# guessing one. A wrong floor silently discards every matching job, which is
+# the worst failure mode this filter has; no floor is strictly safer until the
+# real number is known.
+min_ctc_lpa = 0.0
+
+# 5+ years customer-facing (Sep 2020 -> present, less a 9-month MBA break).
+target_yoe = 5
+
 full_time_only = true
+
+# Kept deliberately tight. "Customer Success" alone matches support and CS-ops
+# roles a level below her current title; "Account Manager" is included because
+# the JD names it as an accepted adjacent background.
 titles = [
-  "SDE 2", "SDE 3",
-  "Senior Software Engineer", "Senior Backend Engineer",
-  "Lead Engineer", "Staff Engineer"
+  "Customer Success Manager", "Senior Customer Success Manager",
+  "Enterprise Customer Success Manager", "Manager, Customer Success",
+  "Customer Success Lead", "Client Success Manager",
+  "Key Account Manager", "Account Manager",
 ]
 
 [schedule]
 brief_poll_cron = "30 15 * * *"   # 9:00 PM IST = 15:30 UTC
 
 [paths]
-resume_pdf = "config/resume.pdf"
-resume_dir = "~/Desktop/cognizant/interview/resumes"
+# [[NEED: generate this PDF]] — the tailored content lives in
+# docs/csm/resume.md and still has open [[NEED]] markers. Export to PDF only
+# after those are filled; see docs/csm/HANDOFF.md.
+resume_pdf = "config/resume-vanshika-csm.pdf"
+resume_dir = "~/Desktop/csm/resumes"
 
 [runtime]
 timezone = "Asia/Kolkata"
 
 [notify]
+# Deliberately still Yash's address, not the candidate's. The pipeline is
+# testable end to end this way, and no mail reaches Vanshika until the kit is
+# actually finished. Switch to her address once docs/csm/gap-analysis.md
+# gaps 1 and 2 are closed.
+# [[NEED: Vanshika's email, once ready to hand over]]
 digest_recipient = "yashdeshmukh7@gmail.com"
 smtp_host        = "smtp.gmail.com"
 smtp_port        = 587
 
 [funding]
-# Strategy 3: newly funded startups hire before they post. Free RSS; no
-# Crunchbase API.
+# Newly funded startups hire CS earlier than they post it — arguably a better
+# signal for this role family than for backend engineering.
 enabled = true
 feeds = [
   "https://inc42.com/feed/",
